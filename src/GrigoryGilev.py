@@ -4,10 +4,10 @@ import mido
 from mido import Message, MetaMessage
 import music21
 
-INPUT_FILE_NAME = 'input1.mid'
-OUTPUT_FILE_NAME = 'output1.mid'
+INPUT_FILE = 'input1.mid'
+OUTPUT_FILE = 'output1.mid'
 
-midi = mido.MidiFile(INPUT_FILE_NAME, clip=True)
+midi = mido.MidiFile(INPUT_FILE, clip=True)
 midi.type = 1
 
 CHORD_MINOR = [0, 3, 7]
@@ -16,11 +16,10 @@ CHORD_DIM = [0, 3, 6]
 CHORD_ALL = [CHORD_MINOR, CHORD_MAJOR, CHORD_DIM]
 CHORD_DURATION = midi.ticks_per_beat * 2
 
-score = music21.converter.parse(INPUT_FILE_NAME)
-key = score.analyze('key')
+key = music21.converter.parse(INPUT_FILE).analyze('key')
 
 if key.mode == "minor":
-    MUSIC_SCALE = (key.tonic.midi+3) % 12
+    MUSIC_SCALE = (key.tonic.midi + 3) % 12
 else:
     MUSIC_SCALE = key.tonic.midi % 12
 
@@ -96,11 +95,8 @@ class Accompaniment:
         :rtype: Chord
         """
 
-        for _chord in self.accordantChords:
-            if _chord.has_note(note):
-                return _chord
-
-        return random.choice(self.accordantChords)
+        _chord = next((_chord for _chord in self.accordantChords if _chord.has_note(note)), None)
+        return random.choice(self.accordantChords) if _chord is None else _chord
 
     def has_in_accordant_chords(self, _chord: Union[Chord, None]) -> bool:
         """
@@ -119,10 +115,7 @@ class Accompaniment:
         :rtype: bool
         """
 
-        if note is None:
-            return False
-
-        return any(existing_chord.has_note(note % 12) for existing_chord in self.accordantChords)
+        return False if note is None else  any(existing_chord.has_note(note % 12) for existing_chord in self.accordantChords)
 
 
 def get_notes_amount(_track) -> int:
@@ -183,7 +176,7 @@ class Chromosome:
         """
 
         self.ticks = ticks
-        self.genes_pool = [None]*ticks
+        self.genes = [None]*ticks
         self.rating = 0
         self.generate_random_genes()
 
@@ -195,7 +188,7 @@ class Chromosome:
         for i in range(self.ticks):
             rand_note = random.randint(0, MAX_NOTE)
             rand_chord = Chord(rand_note, random.choice(CHORD_ALL))
-            self.genes_pool[i] = rand_chord
+            self.genes[i] = rand_chord
 
     def __eq__(self, other):
         return self.rating == other.rating
@@ -227,18 +220,17 @@ def calculate_rating(_population: List[Union[None, Chromosome]]):
     for chromosome in _population:
         chromosome.rating = chromosome.ticks
         for i in range(chromosome.ticks):
-            if final_genome_chord.has_in_accordant_chords(chromosome.genes_pool[i]):
+            if final_genome_chord.has_in_accordant_chords(chromosome.genes[i]):
                 chromosome.rating -= 0.5
                 if song_notes[i] is None:
                     chromosome.rating -= 0.5
                     continue
-                if not final_genome_chord.has_note_in_accordant_chords(song_notes[i]) or chromosome.genes_pool[i].has_note(song_notes[i]):
+                if not final_genome_chord.has_note_in_accordant_chords(song_notes[i]) or chromosome.genes[i].has_note(song_notes[i]):
                     chromosome.rating -= 0.5
 
 
 POPULATION_SIZE = 128
 best_fit_chromosomes = [None] * (POPULATION_SIZE // 4)
-
 population = create_population(POPULATION_SIZE, final_genome_chord.ticks)
 
 
@@ -269,15 +261,14 @@ def cross(chromosome1: Chromosome, chromosome2: Chromosome) -> Chromosome:
     :rtype: Chromosome
     """
 
-    ticks = chromosome1.ticks
-    point = random.randint(0, ticks-1)
-    child = Chromosome(ticks)
+    point = random.randint(0, chromosome1.ticks-1)
+    child = Chromosome(chromosome1.ticks)
 
     for i in range(point):
-        child.genes_pool[i] = chromosome1.genes_pool[i]
+        child.genes[i] = chromosome1.genes[i]
 
-    for i in range(point, ticks):
-        child.genes_pool[i] = chromosome2.genes_pool[i]
+    for i in range(point, chromosome1.ticks):
+        child.genes[i] = chromosome2.genes[i]
 
     return child
 
@@ -293,26 +284,25 @@ def populate(_population, parents: List[Union[Chromosome, None]], children_count
 
 
 def mutate(_population: List[Union[None, Chromosome]], chromosome_count: int, gene_count: int):
-    pop_size = len(_population)
     for i in range(chromosome_count):
-        chromosome_pos = random.randint(0, pop_size - 1)
-        chromosome = _population[chromosome_pos]
+        chromosome_index = random.randint(0, len(_population) - 1)
+        chromosome = _population[chromosome_index]
         for j in range(gene_count):
-            rand_note = random.randint(0, MAX_NOTE)
-            rand_chord = Chord(rand_note, random.choice(CHORD_ALL))
-            gene_pos = random.randint(0, chromosome.ticks - 1)
-            chromosome.genes_pool[gene_pos] = rand_chord
+            note_random = random.randint(0, MAX_NOTE)
+            chord_random = Chord(note_random, random.choice(CHORD_ALL))
+            gene_index = random.randint(0, chromosome.ticks - 1)
+            chromosome.genes[gene_index] = chord_random
 
 
 iteration_count = 0
-max_iteration_count = 5000
+MAX_ITERATIONS = 5000
 
 while True:
     iteration_count += 1
     calculate_rating(population)
     population = sorted(population)
 
-    if population[0].rating == 0 or iteration_count>max_iteration_count:
+    if iteration_count > MAX_ITERATIONS or population[0].rating == 0:
         break
 
     select(population, best_fit_chromosomes)
@@ -320,8 +310,7 @@ while True:
     populate(population, best_fit_chromosomes, POPULATION_SIZE // 2)
     mutate(population, size // 2, 1)
 
-"""Now we append track using the best generated accompanement and write it into the new output file"""
-for chord in population[0].genes_pool:
+for chord in population[0].genes:
     tracks.append(Message('note_on', channel=0, note=chord.note_list[0] + avg_displacement, velocity=velocity, time=0))
     tracks.append(Message('note_on', channel=0, note=chord.note_list[1] + avg_displacement, velocity=velocity, time=0))
     tracks.append(Message('note_on', channel=0, note=chord.note_list[2] + avg_displacement, velocity=velocity, time=0))
@@ -330,4 +319,4 @@ for chord in population[0].genes_pool:
     tracks.append(Message('note_off', channel=0, note=chord.note_list[2] + avg_displacement, velocity=velocity, time=0))
 
 midi.tracks.append(tracks)
-midi.save(OUTPUT_FILE_NAME)
+midi.save(OUTPUT_FILE)
